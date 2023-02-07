@@ -1,11 +1,7 @@
 # Copyright (c) Facebook, Inc. and its affiliates.
-import copy
-import logging
-import numpy as np
 from typing import Dict, List, Optional, Tuple
+
 import torch
-from torch import nn
-import json
 from detectron2.utils.events import get_event_storage
 from detectron2.config import configurable
 from detectron2.structures import ImageList, Instances, Boxes
@@ -13,9 +9,7 @@ import detectron2.utils.comm as comm
 
 from detectron2.modeling.meta_arch.build import META_ARCH_REGISTRY
 from detectron2.modeling.meta_arch.rcnn import GeneralizedRCNN
-from detectron2.modeling.postprocessing import detector_postprocess
-from detectron2.utils.visualizer import Visualizer, _create_text_labels
-from detectron2.data.detection_utils import convert_image_to_rgb
+from mmcv.runner.fp16_utils import wrap_fp16_model
 
 from torch.cuda.amp import autocast
 from ..text.text_encoder import build_text_encoder
@@ -61,6 +55,10 @@ class CustomRCNN(GeneralizedRCNN):
             for v in self.text_encoder.parameters():
                 v.requires_grad = False
 
+        if fp16:
+            print("use fp16 model")
+            wrap_fp16_model(self.backbone)
+
 
     @classmethod
     def from_config(cls, cfg):
@@ -94,7 +92,13 @@ class CustomRCNN(GeneralizedRCNN):
         assert detected_instances is None
 
         images = self.preprocess_image(batched_inputs)
-        features = self.backbone(images.tensor)
+
+        if self.fp16:
+            features = self.backbone(images.tensor.half())
+            features = {k: v.float() for k, v in features.items()}
+        else:
+            features = self.backbone(images.tensor)
+
         proposals, _ = self.proposal_generator(images, features, None)
         results, _ = self.roi_heads(images, features, proposals)
         if do_postprocess:
